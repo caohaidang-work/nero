@@ -1,26 +1,27 @@
+import { BlurView } from 'expo-blur';
 import { useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Animated,
-    Dimensions,
-    Image,
-    Linking,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Animated,
+  Dimensions,
+  Easing,
+  Image,
+  Linking,
+  Platform,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../context/auth';
 
 const { width, height } = Dimensions.get('window');
-
-const ITEM_SIZE = 110; 
+const ITEM_SIZE = 150;
 
 export default function RecentScreen() {
   const { accessToken }: any = useAuth();
-  
   const [tracks, setTracks] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeIndex, setActiveIndex] = useState<number>(0);
@@ -28,164 +29,252 @@ export default function RecentScreen() {
   const scrollY = useRef(new Animated.Value(0)).current;
   const flatListRef = useRef<any>(null);
 
-  // --- THÊM LOGIC AUTO-REFRESH 30 GIÂY ---
+  // Animation xoay đĩa CD cho bài active
+  const cdSpinAnim = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
-    // 1. Tải dữ liệu lần đầu tiên (hiện vòng xoay)
     fetchRecentTracks(false);
-
-    // 2. Thiết lập bộ đếm thời gian 30s (30000ms)
-    const interval = setInterval(() => {
-      fetchRecentTracks(true); // true = Tải ngầm, không hiện vòng xoay
-    }, 30000);
-
-    // 3. Dọn dẹp bộ đếm khi thoát khỏi màn hình này để tránh rò rỉ bộ nhớ
+    const interval = setInterval(() => fetchRecentTracks(true), 30000);
     return () => clearInterval(interval);
-  }, [accessToken]); // Cập nhật lại interval nếu token đổi
+  }, [accessToken]);
 
-  // Thêm tham số isBackground để biết đây là tải ngầm hay tải lần đầu
+  // Vòng lặp xoay đĩa CD khi focus
+  useEffect(() => {
+    cdSpinAnim.setValue(0);
+    const spinLoop = Animated.loop(
+      Animated.timing(cdSpinAnim, {
+        toValue: 1,
+        duration: 8000,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+    spinLoop.start();
+    return () => spinLoop.stop();
+  }, [activeIndex]);
+
   const fetchRecentTracks = async (isBackground = false) => {
     if (!accessToken) {
-      setTracks(Array(15).fill({
-        played_at: new Date().toISOString(),
-        track: {
-          name: 'Day light',
-          artists: [{ name: 'Kernin Joki' }],
-          album: { images: [{ url: 'https://picsum.photos/200' }] },
-          external_urls: { spotify: 'https://spotify.com' }
-        }
-      }));
+      setTracks(
+        Array(15).fill({
+          played_at: new Date().toISOString(),
+          track: {
+            id: 'sample',
+            name: 'Daylight',
+            artists: [{ name: 'Kernin Joki' }],
+            album: { images: [{ url: 'https://picsum.photos/200' }] },
+            external_urls: { spotify: 'https://spotify.com' },
+          },
+        })
+      );
       if (!isBackground) setIsLoading(false);
       return;
     }
-    
-    // Chỉ bật loading khi KHÔNG PHẢI đang tải ngầm
-    if (!isBackground) {
-      setIsLoading(true);
-    }
+
+    if (!isBackground) setIsLoading(true);
 
     try {
-      const res = await fetch('https://api.spotify.com/v1/me/player/recently-played?limit=30', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      const res = await fetch(
+        'https://api.spotify.com/v1/me/player/recently-played?limit=30',
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
       const data = await res.json();
-      if (data?.items) {
-        setTracks(data.items);
-      }
+      if (data?.items) setTracks(data.items);
     } catch (e) {
-      console.error('Lỗi khi tải lịch sử:', e);
+      console.error(e);
     } finally {
-      if (!isBackground) {
-        setIsLoading(false);
-      }
+      if (!isBackground) setIsLoading(false);
     }
   };
 
-  const handleScrollEnd = (event: any) => {
+  const handleScroll = (event: any) => {
     const offsetY = event.nativeEvent.contentOffset.y;
     const index = Math.round(offsetY / ITEM_SIZE);
-    setActiveIndex(index);
+    if (index >= 0 && index < tracks.length && index !== activeIndex) {
+      setActiveIndex(index);
+    }
   };
+
+  const cdSpinInterpolate = cdSpinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
 
   const renderItem = ({ item, index }: any) => {
     const inputRange = [
-      (index - 2) * ITEM_SIZE,
-      (index - 1) * ITEM_SIZE,
-      index * ITEM_SIZE,
-      (index + 1) * ITEM_SIZE,
-      (index + 2) * ITEM_SIZE,
-    ];
-    const centerInputRange = [
       (index - 1) * ITEM_SIZE,
       index * ITEM_SIZE,
       (index + 1) * ITEM_SIZE,
     ];
 
-    const translateX = scrollY.interpolate({ inputRange, outputRange: [60, 20, 0, 20, 60], extrapolate: 'clamp' });
-    const scale = scrollY.interpolate({ inputRange, outputRange: [0.7, 0.85, 1, 0.85, 0.7], extrapolate: 'clamp' });
-    const rotate = scrollY.interpolate({ inputRange, outputRange: ['-15deg', '-5deg', '0deg', '5deg', '15deg'], extrapolate: 'clamp' });
-    const itemOpacity = scrollY.interpolate({ inputRange, outputRange: [0.2, 0.5, 1, 0.5, 0.2], extrapolate: 'clamp' });
+    // Thu phóng tổng thể hộp CD
+    const scale = scrollY.interpolate({
+      inputRange,
+      outputRange: [0.86, 1, 0.86],
+      extrapolate: 'clamp',
+    });
 
-    const activeFocusOpacity = scrollY.interpolate({ inputRange: centerInputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' });
-    const playButtonScale = scrollY.interpolate({ inputRange: centerInputRange, outputRange: [0.5, 1, 0.5], extrapolate: 'clamp' });
+    // Độ mờ
+    const opacity = scrollY.interpolate({
+      inputRange,
+      outputRange: [0.45, 1, 0.45],
+      extrapolate: 'clamp',
+    });
+
+    // Độ đùn ra của đĩa CD: Khi chạm tâm, đĩa CD trượt vươn hẳn sang phải
+    const cdTranslateX = scrollY.interpolate({
+      inputRange,
+      outputRange: [0, 48, 0],
+      extrapolate: 'clamp',
+    });
+
+    const isCurrent = index === activeIndex;
 
     return (
-      <Animated.View 
+      <Animated.View
         style={[
-          styles.itemWrapper, 
-          { transform: [{ translateX }, { scale }, { rotateZ: rotate }], opacity: itemOpacity }
+          styles.itemWrapper,
+          {
+            transform: [{ scale }],
+            opacity,
+            zIndex: isCurrent ? 50 : 1,
+          },
         ]}
       >
-        <TouchableOpacity 
-          style={styles.trackItem} 
-          activeOpacity={0.8}
+        <TouchableOpacity
+          style={styles.jewelCaseWrapper}
+          activeOpacity={0.9}
           onPress={() => {
-            if (index === activeIndex) {
+            if (isCurrent) {
               Linking.openURL(item.track.external_urls.spotify);
             } else {
-              flatListRef.current?.scrollToOffset({ offset: index * ITEM_SIZE, animated: true });
+              flatListRef.current?.scrollToOffset({
+                offset: index * ITEM_SIZE,
+                animated: true,
+              });
             }
           }}
         >
-          <Animated.View style={[styles.activeBackground, { opacity: activeFocusOpacity }]} />
-
-          <Image 
-            source={{ uri: item.track?.album?.images?.[0]?.url || 'https://via.placeholder.com/150' }} 
-            style={styles.albumArt} 
-          />
-          
-          <View style={styles.trackInfo}>
-            <View>
-              <Text style={styles.inactiveTitle} numberOfLines={1}>{item.track?.name || 'Unknown Track'}</Text>
-              <Text style={styles.inactiveArtist} numberOfLines={1}>{item.track?.artists?.map((a: any) => a.name).join(', ') || 'Unknown Artist'}</Text>
-            </View>
-
-            <Animated.View style={[StyleSheet.absoluteFill, { opacity: activeFocusOpacity, justifyContent: 'center' }]}>
-              <Text style={styles.activeTitle} numberOfLines={1}>{item.track?.name || 'Unknown Track'}</Text>
-              <Text style={styles.activeArtist} numberOfLines={1}>{item.track?.artists?.map((a: any) => a.name).join(', ') || 'Unknown Artist'}</Text>
-            </Animated.View>
-          </View>
-
-          <Animated.View 
+          {/* ĐĨA CD BÊN DƯỚI (Trượt thò ra ngoài khi active) */}
+          <Animated.View
             style={[
-              styles.playButton, 
-              { opacity: activeFocusOpacity, transform: [{ scale: playButtonScale }] }
+              styles.cdDisc,
+              {
+                transform: [
+                  { translateX: cdTranslateX },
+                  { rotate: isCurrent ? cdSpinInterpolate : '0deg' },
+                ],
+              },
             ]}
           >
-            <Text style={styles.playButtonText}>Play</Text>
+            {/* Rãnh đĩa quang kim loại */}
+            <View style={styles.cdGrooveOuter} />
+            <Image
+              source={{
+                uri:
+                  item.track?.album?.images?.[0]?.url ||
+                  'https://via.placeholder.com/150',
+              }}
+              style={styles.cdArtwork}
+            />
+            {/* Lỗ trục đĩa trong suốt có vành nhựa */}
+            <View style={styles.cdHoleRing}>
+              <View style={styles.cdHoleCenter} />
+            </View>
           </Animated.View>
+
+          {/* VỎ HỘP JEWEL CASE TRONG SUỐT (Nằm đè lên trên) */}
+          <View style={styles.jewelCaseFront}>
+            <BlurView intensity={35} tint="light" style={StyleSheet.absoluteFill} />
+
+            {/* Gáy bản lề nhựa bên trái */}
+            <View style={styles.caseSpine}>
+              <View style={styles.spineGroove} />
+              <View style={styles.spineGroove} />
+            </View>
+
+            {/* Ảnh bìa album vuông nằm trong vỏ */}
+            <View style={styles.albumArtContainer}>
+              <Image
+                source={{
+                  uri:
+                    item.track?.album?.images?.[0]?.url ||
+                    'https://via.placeholder.com/150',
+                }}
+                style={styles.caseArt}
+              />
+              {/* Tem dán Hologram Y2K */}
+              <View style={styles.holoBadge}>
+                <Text style={styles.holoText}>COMPACT DISC</Text>
+              </View>
+            </View>
+
+            {/* Thông tin bài hát bên trong booklet */}
+            <View style={styles.trackInfo}>
+              <Text style={styles.trackIndex}>
+                TRACK // {String(index + 1).padStart(2, '0')}
+              </Text>
+              <Text style={styles.trackTitle} numberOfLines={1}>
+                {item.track?.name}
+              </Text>
+              <Text style={styles.trackArtist} numberOfLines={1}>
+                {item.track?.artists?.map((a: any) => a.name).join(', ')}
+              </Text>
+            </View>
+
+            {/* Vết bóng lóa phản chiếu chéo mặt kính */}
+            <View style={styles.caseSheen} />
+          </View>
         </TouchableOpacity>
       </Animated.View>
     );
   };
 
+  const activeTrack = tracks[activeIndex]?.track;
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
-      
+
+      {activeTrack?.album?.images?.[0]?.url && (
+        <>
+          <Image
+            source={{ uri: activeTrack.album.images[0].url }}
+            style={styles.backgroundAlbum}
+            blurRadius={3}
+          />
+          <BlurView intensity={80} tint="light" style={StyleSheet.absoluteFill} />
+        </>
+      )}
+      <View style={styles.backgroundOverlay} />
+
+      {/* Header chỉ báo */}
+      <View style={styles.topIndicator}>
+        <Text style={styles.topIndicatorText}>
+          JEWEL ARCHIVE // DISC {String(activeIndex + 1).padStart(2, '0')}
+        </Text>
+      </View>
+
       {isLoading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#000" />
-        </View>
+        <ActivityIndicator size="large" color="#000" style={{ flex: 1 }} />
       ) : (
         <Animated.FlatList
           ref={flatListRef}
           data={tracks}
-          // Thêm id bài hát vào key để React không bị nhầm lẫn khi list được làm mới
-          keyExtractor={(item, index) => `${item.played_at}-${item.track?.id || index}`} 
+          keyExtractor={(item, index) =>
+            `${item.played_at}-${item.track?.id || index}`
+          }
           renderItem={renderItem}
           showsVerticalScrollIndicator={false}
-          
           onScroll={Animated.event(
             [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-            { useNativeDriver: true }
+            { useNativeDriver: false, listener: handleScroll }
           )}
           scrollEventThrottle={16}
           snapToInterval={ITEM_SIZE}
           decelerationRate="fast"
-          onMomentumScrollEnd={handleScrollEnd}
-
           contentContainerStyle={{
-            paddingTop: height / 2 - ITEM_SIZE / 2 - 40,
+            paddingTop: height / 2 - ITEM_SIZE / 2 - 20,
             paddingBottom: height / 2 - ITEM_SIZE / 2,
             alignItems: 'center',
           }}
@@ -195,19 +284,204 @@ export default function RecentScreen() {
   );
 }
 
-// ... (Giữ nguyên phần styles ở phía trên) ...
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F4F6FB', justifyContent: 'center' },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  itemWrapper: { height: ITEM_SIZE, justifyContent: 'center', alignItems: 'center', width: width },
-  trackItem: { flexDirection: 'row', alignItems: 'center', padding: 10, width: width * 0.85, position: 'relative' },
-  activeBackground: { ...StyleSheet.absoluteFill, backgroundColor: '#FFFFFF', borderRadius: 50, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.08, shadowRadius: 15, elevation: 8 },
-  albumArt: { width: 75, height: 75, borderRadius: 37.5, backgroundColor: '#E0E0E0', zIndex: 1 },
-  trackInfo: { flex: 1, marginLeft: 20, justifyContent: 'center', zIndex: 1 },
-  inactiveTitle: { color: '#A0A0A0', fontSize: 22, fontWeight: '600', marginBottom: 4 },
-  inactiveArtist: { color: '#D0D0D0', fontSize: 15, fontWeight: '500' },
-  activeTitle: { color: '#1A1A1A', fontSize: 22, fontWeight: '800', marginBottom: 4 },
-  activeArtist: { color: '#8A8A8A', fontSize: 15, fontWeight: '600' },
-  playButton: { backgroundColor: '#F8F8F8', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 20, borderWidth: 1, borderColor: '#EEEEEE', marginRight: 5, zIndex: 1 },
-  playButtonText: { color: '#000', fontWeight: 'bold', fontSize: 14 },
+  container: { flex: 1, backgroundColor: 'transparent' },
+  backgroundAlbum: {
+    position: 'absolute',
+    width: '160%',
+    height: '160%',
+    left: '-30%',
+    top: '-20%',
+    opacity: 0.7,
+  },
+  backgroundOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(246, 244, 239, 0.52)',
+  },
+
+  topIndicator: {
+    paddingHorizontal: 25,
+    marginTop: 15,
+  },
+  topIndicatorText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#6E6759',
+    letterSpacing: 1.2,
+  },
+
+  itemWrapper: {
+    height: ITEM_SIZE,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: width,
+  },
+
+  jewelCaseWrapper: {
+    width: width * 0.86,
+    height: 122,
+    position: 'relative',
+    justifyContent: 'center',
+  },
+
+  // ĐĨA CD
+  cdDisc: {
+    position: 'absolute',
+    right: 25,
+    width: 108,
+    height: 108,
+    borderRadius: 54,
+    backgroundColor: '#D6D8DC',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#C0C2C8',
+    shadowColor: '#000',
+    shadowOffset: { width: 4, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
+    zIndex: 1,
+  },
+  cdGrooveOuter: {
+    position: 'absolute',
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255,255,255,0.6)',
+  },
+  cdArtwork: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    opacity: 0.9,
+  },
+  cdHoleRing: {
+    position: 'absolute',
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(255,255,255,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#B0B2B8',
+  },
+  cdHoleCenter: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#EBE8DE',
+  },
+
+  // VỎ HỘP MẶT TRƯỚC
+  jewelCaseFront: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '88%',
+    height: 122,
+    backgroundColor: 'rgba(255, 255, 255, 0.45)',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.75)',
+    paddingLeft: 4,
+    paddingRight: 12,
+    shadowColor: '#1A1815',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    elevation: 6,
+    position: 'relative',
+    overflow: 'hidden',
+    zIndex: 2,
+  },
+
+  // Gáy bản lề nhựa bên trái
+  caseSpine: {
+    width: 8,
+    height: '90%',
+    backgroundColor: 'rgba(0, 0, 0, 0.08)',
+    borderRadius: 4,
+    marginRight: 8,
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  spineGroove: {
+    width: 3,
+    height: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
+    borderRadius: 1.5,
+  },
+
+  // Bìa Album
+  albumArtContainer: {
+    position: 'relative',
+  },
+  caseArt: {
+    width: 86,
+    height: 86,
+    borderRadius: 6,
+    borderWidth: 0.5,
+    borderColor: 'rgba(0,0,0,0.1)',
+  },
+  holoBadge: {
+    position: 'absolute',
+    bottom: 4,
+    left: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 2,
+  },
+  holoText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 6.5,
+    fontWeight: '900',
+    color: '#FFF',
+    letterSpacing: 0.5,
+  },
+
+  // Text thông tin bài hát
+  trackInfo: {
+    flex: 1,
+    marginLeft: 12,
+    justifyContent: 'center',
+  },
+  trackIndex: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#706B61',
+    letterSpacing: 0.8,
+    marginBottom: 4,
+  },
+  trackTitle: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1A1815',
+    letterSpacing: -0.3,
+  },
+  trackArtist: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#5C564C',
+    marginTop: 3,
+  },
+
+  // Vết bóng chéo giả lập mặt kính
+  caseSheen: {
+    position: 'absolute',
+    top: -40,
+    right: -40,
+    width: 100,
+    height: 200,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    transform: [{ rotate: '30deg' }],
+    pointerEvents: 'none',
+  },
 });
