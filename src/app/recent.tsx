@@ -1,10 +1,9 @@
 import { BlurView } from 'expo-blur';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Animated,
   Dimensions,
-  Easing,
+  FlatList,
   Image,
   Linking,
   Platform,
@@ -17,52 +16,78 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../context/auth';
 
-const { width, height } = Dimensions.get('window');
-const ITEM_SIZE = 150;
+const { width } = Dimensions.get('window');
+
+const COLUMN_GAP = 14;
+const CONTAINER_PADDING = 16;
+const CASE_SIZE = (width - CONTAINER_PADDING * 2 - COLUMN_GAP) / 2;
+
+const getTimeAgo = (dateString: string) => {
+  if (!dateString) return '';
+
+  const past = new Date(dateString).getTime();
+  if (isNaN(past)) return '';
+
+  const now = Date.now();
+  const diffSec = Math.floor((now - past) / 1000);
+
+  if (diffSec < 60) return 'JUST NOW';
+
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}M AGO`;
+
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour}H AGO`;
+
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay < 7) return `${diffDay}D AGO`;
+
+  const diffWeek = Math.floor(diffDay / 7);
+  if (diffWeek < 4) return `${diffWeek}W AGO`;
+
+  const d = new Date(past);
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
 
 export default function RecentScreen() {
   const { accessToken }: any = useAuth();
   const [tracks, setTracks] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeIndex, setActiveIndex] = useState<number>(0);
-
-  const scrollY = useRef(new Animated.Value(0)).current;
-  const flatListRef = useRef<any>(null);
-
-  // Animation xoay đĩa CD cho bài active
-  const cdSpinAnim = useRef(new Animated.Value(0)).current;
+  const [userName, setUserName] = useState<string>('');
 
   useEffect(() => {
     fetchRecentTracks(false);
+    fetchUserProfile();
+
     const interval = setInterval(() => fetchRecentTracks(true), 30000);
     return () => clearInterval(interval);
   }, [accessToken]);
 
-  // Vòng lặp xoay đĩa CD khi focus
-  useEffect(() => {
-    cdSpinAnim.setValue(0);
-    const spinLoop = Animated.loop(
-      Animated.timing(cdSpinAnim, {
-        toValue: 1,
-        duration: 8000,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      })
-    );
-    spinLoop.start();
-    return () => spinLoop.stop();
-  }, [activeIndex]);
+  const fetchUserProfile = async () => {
+    if (!accessToken) return;
+    try {
+      const res = await fetch('https://api.spotify.com/v1/me', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUserName(data?.display_name || data?.id || '');
+      }
+    } catch (e) {
+      console.error('Lỗi khi tải thông tin user:', e);
+    }
+  };
 
   const fetchRecentTracks = async (isBackground = false) => {
     if (!accessToken) {
       setTracks(
-        Array(15).fill({
-          played_at: new Date().toISOString(),
+        Array(16).fill({
+          played_at: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
           track: {
             id: 'sample',
-            name: 'Daylight',
-            artists: [{ name: 'Kernin Joki' }],
-            album: { images: [{ url: 'https://picsum.photos/200' }] },
+            name: 'Riding on Rhythm',
+            artists: [{ name: 'Y2K Mixtape' }],
+            album: { images: [{ url: 'https://picsum.photos/400' }] },
             external_urls: { spotify: 'https://spotify.com' },
           },
         })
@@ -87,150 +112,109 @@ export default function RecentScreen() {
     }
   };
 
-  const handleScroll = (event: any) => {
-    const offsetY = event.nativeEvent.contentOffset.y;
-    const index = Math.round(offsetY / ITEM_SIZE);
-    if (index >= 0 && index < tracks.length && index !== activeIndex) {
-      setActiveIndex(index);
-    }
-  };
-
-  const cdSpinInterpolate = cdSpinAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg'],
-  });
-
-  const renderItem = ({ item, index }: any) => {
-    const inputRange = [
-      (index - 1) * ITEM_SIZE,
-      index * ITEM_SIZE,
-      (index + 1) * ITEM_SIZE,
-    ];
-
-    // Thu phóng tổng thể hộp CD
-    const scale = scrollY.interpolate({
-      inputRange,
-      outputRange: [0.86, 1, 0.86],
-      extrapolate: 'clamp',
-    });
-
-    // Độ mờ
-    const opacity = scrollY.interpolate({
-      inputRange,
-      outputRange: [0.45, 1, 0.45],
-      extrapolate: 'clamp',
-    });
-
-    // Độ đùn ra của đĩa CD: Khi chạm tâm, đĩa CD trượt vươn hẳn sang phải
-    const cdTranslateX = scrollY.interpolate({
-      inputRange,
-      outputRange: [0, 48, 0],
-      extrapolate: 'clamp',
-    });
-
-    const isCurrent = index === activeIndex;
+  const renderItem = ({ item }: any) => {
+    const imageUrl =
+      item.track?.album?.images?.[0]?.url || 'https://via.placeholder.com/300';
 
     return (
-      <Animated.View
-        style={[
-          styles.itemWrapper,
-          {
-            transform: [{ scale }],
-            opacity,
-            zIndex: isCurrent ? 50 : 1,
-          },
-        ]}
+      <TouchableOpacity
+        style={styles.itemContainer}
+        activeOpacity={0.88}
+        onPress={() => Linking.openURL(item.track?.external_urls?.spotify)}
       >
-        <TouchableOpacity
-          style={styles.jewelCaseWrapper}
-          activeOpacity={0.9}
-          onPress={() => {
-            if (isCurrent) {
-              Linking.openURL(item.track.external_urls.spotify);
-            } else {
-              flatListRef.current?.scrollToOffset({
-                offset: index * ITEM_SIZE,
-                animated: true,
-              });
-            }
-          }}
-        >
-          {/* ĐĨA CD BÊN DƯỚI (Trượt thò ra ngoài khi active) */}
-          <Animated.View
-            style={[
-              styles.cdDisc,
-              {
-                transform: [
-                  { translateX: cdTranslateX },
-                  { rotate: isCurrent ? cdSpinInterpolate : '0deg' },
-                ],
-              },
-            ]}
-          >
-            {/* Rãnh đĩa quang kim loại */}
-            <View style={styles.cdGrooveOuter} />
-            <Image
-              source={{
-                uri:
-                  item.track?.album?.images?.[0]?.url ||
-                  'https://via.placeholder.com/150',
-              }}
-              style={styles.cdArtwork}
-            />
-            {/* Lỗ trục đĩa trong suốt có vành nhựa */}
-            <View style={styles.cdHoleRing}>
-              <View style={styles.cdHoleCenter} />
-            </View>
-          </Animated.View>
+        {/* 1. VỎ HỘP ACRYLIC JEWEL CASE THỰC TẾ */}
+        <View style={styles.jewelCaseOuter}>
+          <BlurView intensity={20} tint="light" style={StyleSheet.absoluteFill} />
 
-          {/* VỎ HỘP JEWEL CASE TRONG SUỐT (Nằm đè lên trên) */}
-          <View style={styles.jewelCaseFront}>
-            <BlurView intensity={35} tint="light" style={StyleSheet.absoluteFill} />
+          {/* Bản lề tròn xoay góc trái trên & dưới */}
+          <View style={[styles.hingePin, styles.hingePinTop]} />
+          <View style={[styles.hingePin, styles.hingePinBottom]} />
 
-            {/* Gáy bản lề nhựa bên trái */}
-            <View style={styles.caseSpine}>
-              <View style={styles.spineGroove} />
-              <View style={styles.spineGroove} />
-            </View>
+          {/* Ngàm giữ khay nhựa (Tray Clips) hai bên cạnh */}
+          <View style={[styles.plasticLockClip, styles.clipLeftTop]} />
+          <View style={[styles.plasticLockClip, styles.clipLeftBottom]} />
+          <View style={[styles.plasticLockClip, styles.clipRightTop]} />
+          <View style={[styles.plasticLockClip, styles.clipRightBottom]} />
 
-            {/* Ảnh bìa album vuông nằm trong vỏ */}
-            <View style={styles.albumArtContainer}>
-              <Image
-                source={{
-                  uri:
-                    item.track?.album?.images?.[0]?.url ||
-                    'https://via.placeholder.com/150',
-                }}
-                style={styles.caseArt}
-              />
-              {/* Tem dán Hologram Y2K */}
-              <View style={styles.holoBadge}>
-                <Text style={styles.holoText}>COMPACT DISC</Text>
+          {/* Khung khay lồng bên trong (Tray Inset Frame) */}
+          <View style={styles.trayInnerFrame}>
+            {/* Gờ tròn dập chìm nơi đặt đĩa CD */}
+            <View style={styles.cdDepressionWell}>
+              {/* ĐĨA CD CHÍNH */}
+              <View style={styles.cdDisc}>
+                <Image source={{ uri: imageUrl }} style={styles.cdArtwork} />
+
+                {/* Vệt phản quang đa sắc trên mặt đĩa */}
+                <View style={styles.cdLightSheenOne} />
+                <View style={styles.cdLightSheenTwo} />
+
+                {/* Rãnh quang học ngoài cùng */}
+                <View style={styles.cdMirrorRingOuter} />
+                <View style={styles.cdMirrorRingInner} />
+
+                {/* Vành kẹp trong suốt trung tâm */}
+                <View style={styles.spindleClampRing}>
+                  <View style={styles.innerClearRing} />
+
+                  {/* Lỗ trục trung tâm */}
+                  <View style={styles.spindleCenterHole} />
+
+                  {/* 6 răng cưa hoa cúc kẹp đĩa (Rosette Teeth) */}
+                  {[0, 60, 120, 180, 240, 300].map((deg) => (
+                    <View
+                      key={deg}
+                      style={[
+                        styles.rosetteTooth,
+                        { transform: [{ rotate: `${deg}deg` }, { translateY: -11 }] },
+                      ]}
+                    />
+                  ))}
+                </View>
               </View>
             </View>
-
-            {/* Thông tin bài hát bên trong booklet */}
-            <View style={styles.trackInfo}>
-              <Text style={styles.trackIndex}>
-                TRACK // {String(index + 1).padStart(2, '0')}
-              </Text>
-              <Text style={styles.trackTitle} numberOfLines={1}>
-                {item.track?.name}
-              </Text>
-              <Text style={styles.trackArtist} numberOfLines={1}>
-                {item.track?.artists?.map((a: any) => a.name).join(', ')}
-              </Text>
-            </View>
-
-            {/* Vết bóng lóa phản chiếu chéo mặt kính */}
-            <View style={styles.caseSheen} />
           </View>
-        </TouchableOpacity>
-      </Animated.View>
+
+          {/* Tem Barcode dán chéo ở mặt trước kính */}
+          <View style={styles.barcodeSticker}>
+            <View style={styles.barcodeLines}>
+              {[2, 1, 3, 1, 2, 4, 1, 3, 1, 2, 1, 3].map((w, i) => (
+                <View
+                  key={i}
+                  style={[
+                    styles.barcodeBar,
+                    { width: w * 0.7, marginRight: 0.6 },
+                  ]}
+                />
+              ))}
+            </View>
+            <Text style={styles.barcodeNumber}>2 112345 678900</Text>
+          </View>
+
+          {/* Vệt bóng phản chiếu sắc cạnh trên mặt kính Acrylic */}
+          <View style={styles.specularShine} />
+          <View style={styles.specularEdgeHighlight} />
+        </View>
+
+        {/* 2. THÔNG TIN BÀI HÁT TỐI GIẢN PHÍA DƯỚI */}
+        <View style={styles.infoContainer}>
+          <Text style={styles.trackTitle} numberOfLines={1}>
+            {item.track?.name}
+          </Text>
+          <View style={styles.metaRow}>
+            <Text style={styles.timeAgoText}>
+              {getTimeAgo(item.played_at)}
+            </Text>
+            <Text style={styles.metaDot}>•</Text>
+            <Text style={styles.trackArtist} numberOfLines={1}>
+              {item.track?.artists?.map((a: any) => a.name).join(', ')}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
     );
   };
 
-  const activeTrack = tracks[activeIndex]?.track;
+  const activeTrack = tracks[0]?.track;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -241,43 +225,33 @@ export default function RecentScreen() {
           <Image
             source={{ uri: activeTrack.album.images[0].url }}
             style={styles.backgroundAlbum}
-            blurRadius={3}
+            blurRadius={4}
           />
           <BlurView intensity={80} tint="light" style={StyleSheet.absoluteFill} />
         </>
       )}
       <View style={styles.backgroundOverlay} />
 
-      {/* Header chỉ báo */}
-      <View style={styles.topIndicator}>
-        <Text style={styles.topIndicatorText}>
-          JEWEL ARCHIVE // DISC {String(activeIndex + 1).padStart(2, '0')}
+      <View style={styles.topHeader}>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {userName ? `${userName.toUpperCase()}'S RECENTLY PLAYED` : 'RECENTLY PLAYED'}
         </Text>
+        <Text style={styles.headerSubtitle}>COMPACT DISC COLLECTION</Text>
       </View>
 
       {isLoading ? (
         <ActivityIndicator size="large" color="#000" style={{ flex: 1 }} />
       ) : (
-        <Animated.FlatList
-          ref={flatListRef}
+        <FlatList
           data={tracks}
+          numColumns={2}
           keyExtractor={(item, index) =>
             `${item.played_at}-${item.track?.id || index}`
           }
           renderItem={renderItem}
           showsVerticalScrollIndicator={false}
-          onScroll={Animated.event(
-            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-            { useNativeDriver: false, listener: handleScroll }
-          )}
-          scrollEventThrottle={16}
-          snapToInterval={ITEM_SIZE}
-          decelerationRate="fast"
-          contentContainerStyle={{
-            paddingTop: height / 2 - ITEM_SIZE / 2 - 20,
-            paddingBottom: height / 2 - ITEM_SIZE / 2,
-            alignItems: 'center',
-          }}
+          columnWrapperStyle={styles.columnWrapper}
+          contentContainerStyle={styles.listContent}
         />
       )}
     </SafeAreaView>
@@ -296,192 +270,292 @@ const styles = StyleSheet.create({
   },
   backgroundOverlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(246, 244, 239, 0.52)',
+    backgroundColor: 'rgba(246, 244, 239, 0.23)',
   },
 
-  topIndicator: {
-    paddingHorizontal: 25,
-    marginTop: 15,
+  topHeader: {
+    paddingHorizontal: CONTAINER_PADDING,
+    marginTop: 8,
+    marginBottom: 14,
   },
-  topIndicatorText: {
+  headerTitle: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 13.5,
+    fontWeight: '900',
+    color: '#1A1815',
+    letterSpacing: 0.8,
+  },
+  headerSubtitle: {
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#6E6759',
-    letterSpacing: 1.2,
+    fontSize: 9,
+    color: '#6F6A60',
+    letterSpacing: 0.6,
+    marginTop: 2,
   },
 
-  itemWrapper: {
-    height: ITEM_SIZE,
-    justifyContent: 'center',
-    alignItems: 'center',
-    width: width,
+  listContent: {
+    paddingHorizontal: CONTAINER_PADDING,
+    paddingBottom: 110,
+  },
+  columnWrapper: {
+    justifyContent: 'space-between',
+    marginBottom: 18,
   },
 
-  jewelCaseWrapper: {
-    width: width * 0.86,
-    height: 122,
+  itemContainer: {
+    width: CASE_SIZE,
+  },
+
+  jewelCaseOuter: {
+    width: CASE_SIZE,
+    height: CASE_SIZE,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.85)',
+    borderBottomColor: 'rgba(180, 180, 180, 0.4)',
+    borderRightColor: 'rgba(180, 180, 180, 0.4)',
+    backgroundColor: 'rgba(255, 255, 255, 0.28)',
     position: 'relative',
-    justifyContent: 'center',
-  },
-
-  // ĐĨA CD
-  cdDisc: {
-    position: 'absolute',
-    right: 25,
-    width: 108,
-    height: 108,
-    borderRadius: 54,
-    backgroundColor: '#D6D8DC',
+    overflow: 'hidden',
+    padding: 5,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#C0C2C8',
     shadowColor: '#000',
-    shadowOffset: { width: 4, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
-    zIndex: 1,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 6,
   },
-  cdGrooveOuter: {
+
+  hingePin: {
     position: 'absolute',
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    left: 2,
+    width: 5,
+    height: 9,
+    borderRadius: 2.5,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderWidth: 0.8,
+    borderColor: 'rgba(0, 0, 0, 0.2)',
+    zIndex: 10,
+  },
+  hingePinTop: { top: 6 },
+  hingePinBottom: { bottom: 6 },
+
+  plasticLockClip: {
+    position: 'absolute',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
     borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.6)',
+    borderColor: 'rgba(0, 0, 0, 0.15)',
+    zIndex: 10,
+  },
+  clipLeftTop: { left: 1, top: 34, width: 3, height: 10, borderRadius: 1 },
+  clipLeftBottom: { left: 1, bottom: 34, width: 3, height: 10, borderRadius: 1 },
+  clipRightTop: { right: 1, top: 34, width: 3, height: 10, borderRadius: 1 },
+  clipRightBottom: { right: 1, bottom: 34, width: 3, height: 10, borderRadius: 1 },
+
+  trayInnerFrame: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 4,
+    backgroundColor: 'rgba(245, 245, 245, 0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.65)',
+    borderTopColor: 'rgba(0, 0, 0, 0.08)',
+    borderLeftColor: 'rgba(0, 0, 0, 0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  cdDepressionWell: {
+    width: CASE_SIZE * 0.88,
+    height: CASE_SIZE * 0.88,
+    borderRadius: (CASE_SIZE * 0.88) / 2,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.12)',
+    borderBottomColor: 'rgba(255, 255, 255, 0.8)',
+    borderRightColor: 'rgba(255, 255, 255, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  cdDisc: {
+    width: CASE_SIZE * 0.84,
+    height: CASE_SIZE * 0.84,
+    borderRadius: (CASE_SIZE * 0.84) / 2,
+    backgroundColor: '#C5C7CC',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+    overflow: 'hidden',
+    borderWidth: 0.8,
+    borderColor: '#9E9FA4',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
   },
   cdArtwork: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    opacity: 0.9,
+    width: '100%',
+    height: '100%',
+    borderRadius: (CASE_SIZE * 0.84) / 2,
   },
-  cdHoleRing: {
+
+  cdLightSheenOne: {
     position: 'absolute',
+    width: '120%',
+    height: '40%',
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    transform: [{ rotate: '35deg' }],
+  },
+  cdLightSheenTwo: {
+    position: 'absolute',
+    width: '120%',
+    height: '30%',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    transform: [{ rotate: '-55deg' }],
+  },
+
+  cdMirrorRingOuter: {
+    position: 'absolute',
+    width: '90%',
+    height: '90%',
+    borderRadius: 100,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+  },
+  cdMirrorRingInner: {
+    position: 'absolute',
+    width: '74%',
+    height: '74%',
+    borderRadius: 100,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+
+  spindleClampRing: {
+    position: 'absolute',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.75)',
+    borderWidth: 1.2,
+    borderColor: '#A8ABB2',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  innerClearRing: {
     width: 26,
     height: 26,
     borderRadius: 13,
-    backgroundColor: 'rgba(255,255,255,0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#B0B2B8',
-  },
-  cdHoleCenter: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#EBE8DE',
-  },
-
-  // VỎ HỘP MẶT TRƯỚC
-  jewelCaseFront: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '88%',
-    height: 122,
     backgroundColor: 'rgba(255, 255, 255, 0.45)',
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.75)',
-    paddingLeft: 4,
-    paddingRight: 12,
-    shadowColor: '#1A1815',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.16,
-    shadowRadius: 14,
-    elevation: 6,
-    position: 'relative',
-    overflow: 'hidden',
-    zIndex: 2,
+    borderWidth: 0.8,
+    borderColor: 'rgba(0, 0, 0, 0.15)',
   },
-
-  // Gáy bản lề nhựa bên trái
-  caseSpine: {
-    width: 8,
-    height: '90%',
-    backgroundColor: 'rgba(0, 0, 0, 0.08)',
-    borderRadius: 4,
-    marginRight: 8,
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingVertical: 6,
-  },
-  spineGroove: {
-    width: 3,
-    height: 14,
-    backgroundColor: 'rgba(255, 255, 255, 0.5)',
-    borderRadius: 1.5,
-  },
-
-  // Bìa Album
-  albumArtContainer: {
-    position: 'relative',
-  },
-  caseArt: {
-    width: 86,
-    height: 86,
-    borderRadius: 6,
-    borderWidth: 0.5,
-    borderColor: 'rgba(0,0,0,0.1)',
-  },
-  holoBadge: {
+  spindleCenterHole: {
     position: 'absolute',
-    bottom: 4,
-    left: 4,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: 'rgba(240, 238, 233, 0.95)',
+    borderWidth: 1,
+    borderColor: '#787A80',
+    zIndex: 5,
+  },
+
+  rosetteTooth: {
+    position: 'absolute',
+    width: 2.2,
+    height: 4,
+    backgroundColor: '#52545A',
+    borderRadius: 1,
+    zIndex: 6,
+  },
+
+  barcodeSticker: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 4,
-    paddingVertical: 1,
+    paddingVertical: 2,
     borderRadius: 2,
+    borderWidth: 0.5,
+    borderColor: '#B8B5AE',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    zIndex: 15,
   },
-  holoText: {
+  barcodeLines: {
+    flexDirection: 'row',
+    height: 10,
+    alignItems: 'stretch',
+  },
+  barcodeBar: {
+    backgroundColor: '#111',
+  },
+  barcodeNumber: {
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 6.5,
-    fontWeight: '900',
-    color: '#FFF',
-    letterSpacing: 0.5,
+    fontSize: 4.8,
+    fontWeight: '700',
+    color: '#111',
+    letterSpacing: 0.3,
+    marginTop: 1,
   },
 
-  // Text thông tin bài hát
-  trackInfo: {
-    flex: 1,
-    marginLeft: 12,
-    justifyContent: 'center',
-  },
-  trackIndex: {
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#706B61',
-    letterSpacing: 0.8,
-    marginBottom: 4,
-  },
-  trackTitle: {
-    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#1A1815',
-    letterSpacing: -0.3,
-  },
-  trackArtist: {
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#5C564C',
-    marginTop: 3,
-  },
-
-  // Vết bóng chéo giả lập mặt kính
-  caseSheen: {
+  specularShine: {
     position: 'absolute',
     top: -40,
-    right: -40,
-    width: 100,
-    height: 200,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    transform: [{ rotate: '30deg' }],
+    right: -20,
+    width: 35,
+    height: CASE_SIZE * 1.6,
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    transform: [{ rotate: '25deg' }],
     pointerEvents: 'none',
+  },
+  specularEdgeHighlight: {
+    position: 'absolute',
+    top: 2,
+    left: 10,
+    right: 10,
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    pointerEvents: 'none',
+  },
+
+  infoContainer: {
+    marginTop: 8,
+    paddingHorizontal: 2,
+  },
+  trackTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#1A1815',
+    letterSpacing: -0.2,
+    marginBottom: 2,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  timeAgoText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#373434',
+    letterSpacing: 0.4,
+  },
+  metaDot: {
+    marginHorizontal: 5,
+    fontSize: 8,
+    color: '#000000',
+  },
+  trackArtist: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#101010',
   },
 });

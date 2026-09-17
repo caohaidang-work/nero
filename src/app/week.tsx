@@ -1,242 +1,621 @@
+import { BlurView } from 'expo-blur';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Dimensions,
   FlatList,
   Image,
   Linking,
   Modal,
-  ScrollView,
+  Platform,
   Share,
+  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../context/auth';
 
+const { width } = Dimensions.get('window');
+
+type TimeRangeType = 'short_term' | 'medium_term';
+
 export default function TopTab() {
   const { accessToken } = useAuth();
-  const [tracks, setTracks] = useState<any[]>([]);
+  
+  // Dữ liệu riêng biệt cho cả 2 mục để làm preview trên Card
+  const [shortTracks, setShortTracks] = useState<any[]>([]);
+  const [mediumTracks, setMediumTracks] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  
-  // State chuyển đổi giữa 1 tháng và 6 tháng
-  const [currentTab, setCurrentTab] = useState<'short_term' | 'medium_term'>('short_term');
-  
-  // State quản lý việc hiển thị Form Mẫu (Modal) để Share
-  const [isShareModalVisible, setIsShareModalVisible] = useState(false);
+
+  // Quản lý cửa sổ mở danh sách riêng biệt
+  const [selectedRange, setSelectedRange] = useState<TimeRangeType | null>(null);
 
   useEffect(() => {
-    fetchTopTracks(currentTab);
-  }, [currentTab]);
+    fetchAllTopTracks();
+  }, [accessToken]);
 
-  const fetchTopTracks = async (timeRange: 'short_term' | 'medium_term') => {
+  const fetchAllTopTracks = async () => {
     if (!accessToken) return;
     setIsLoading(true);
-    
+
     try {
-      // Sử dụng API chính thức của Spotify để tránh lỗi 404/JSON Parse
-      const apiUrl = `https://api.spotify.com/v1/me/top/tracks?time_range=${timeRange}&limit=20`;
-      
-      const res = await fetch(apiUrl, {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      
-      // 1. Kiểm tra nếu API trả về lỗi (không phải status 200 OK)
-      if (!res.ok) {
-        const errorText = await res.text(); 
-        console.error(`Lỗi API (${res.status}):`, errorText);
-        setIsLoading(false);
-        return; 
+      // Tải song song cả 2 mục
+      const [resShort, resMedium] = await Promise.all([
+        fetch('https://api.spotify.com/v1/me/top/tracks?time_range=short_term&limit=20', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }),
+        fetch('https://api.spotify.com/v1/me/top/tracks?time_range=medium_term&limit=20', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }),
+      ]);
+
+      if (resShort.ok) {
+        const dataShort = await resShort.json();
+        if (dataShort.items) {
+          setShortTracks(
+            dataShort.items.map((i: any) => ({
+              id: i.id,
+              name: i.name,
+              artist: i.artists[0].name,
+              albumUrl: i.album.images[0]?.url,
+              spotifyUrl: i.external_urls.spotify,
+            }))
+          );
+        }
       }
 
-      // 2. Phân tích dữ liệu JSON khi đã chắc chắn gọi thành công
-      const data = await res.json();
-      
-      if (data.items) {
-        const normalized = data.items.map((i: any) => ({
-          id: i.id,
-          name: i.name,
-          artist: i.artists[0].name,
-          albumUrl: i.album.images[0].url,
-          spotifyUrl: i.external_urls.spotify,
-        }));
-        setTracks(normalized);
+      if (resMedium.ok) {
+        const dataMedium = await resMedium.json();
+        if (dataMedium.items) {
+          setMediumTracks(
+            dataMedium.items.map((i: any) => ({
+              id: i.id,
+              name: i.name,
+              artist: i.artists[0].name,
+              albumUrl: i.album.images[0]?.url,
+              spotifyUrl: i.external_urls.spotify,
+            }))
+          );
+        }
       }
     } catch (error) {
-      console.error("Lỗi lấy danh sách Top Tracks:", error);
+      console.error('Lỗi lấy dữ liệu Top Tracks:', error);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Hàm xử lý việc Share sang nền tảng khác
   const onShare = async () => {
+    if (!selectedRange) return;
+    const activeList = selectedRange === 'short_term' ? shortTracks : mediumTracks;
+    const timeText = selectedRange === 'short_term' ? 'Recent Faves' : 'All Time Feels';
+
     try {
-      const timeText = currentTab === 'short_term' ? 'Recent Faves' : 'All Time Feels';
-      
-      // Khởi tạo nội dung văn bản để chia sẻ
       let message = `🎵 My Top Tracks - ${timeText} 🎵\n\n`;
-      
-      // Lấy top 5 bài đầu tiên để share
-      tracks.slice(0, 5).forEach((track, index) => {
+      activeList.slice(0, 5).forEach((track, index) => {
         message += `${index + 1}. ${track.name} - ${track.artist}\n`;
       });
-      
-      message += `\nCheck out my music taste!`;
+      message += `\nShared via Spotify Tracker`;
 
-      // Kích hoạt bảng share native của điện thoại (iOS/Android)
-      await Share.share({
-        message: message,
-      });
-      
-      // Đóng modal preview sau khi gọi Share xong
-      setIsShareModalVisible(false);
+      await Share.share({ message });
     } catch (error) {
-      console.error('Lỗi khi chia sẻ:', error);
+      console.error('Lỗi chia sẻ:', error);
     }
   };
 
-  const renderItem = ({ item, index }: { item: any, index: number }) => (
-    <TouchableOpacity style={styles.trackItem} onPress={() => Linking.openURL(item.spotifyUrl)}>
-      <Text style={styles.rankText}>#{index + 1}</Text>
-      <Image source={{ uri: item.albumUrl }} style={styles.albumArt} />
-      <View style={styles.trackInfo}>
-        <Text style={styles.trackName} numberOfLines={1}>{item.name}</Text>
-        <Text style={styles.artistName} numberOfLines={1}>{item.artist}</Text>
+  const renderTrackItem = ({ item, index }: { item: any; index: number }) => (
+    <TouchableOpacity
+      style={styles.detailTrackItem}
+      activeOpacity={0.8}
+      onPress={() => Linking.openURL(item.spotifyUrl)}
+    >
+      <View style={styles.miniCdCase}>
+        <Image source={{ uri: item.albumUrl }} style={styles.miniCdImage} />
+        <View style={styles.miniCdCenterRing}>
+          <View style={styles.miniCdHole} />
+        </View>
       </View>
+
+      <View style={styles.trackDetails}>
+        <View style={styles.trackTitleRow}>
+          <Text style={styles.rankNum}>#{String(index + 1).padStart(2, '0')}</Text>
+          <Text style={styles.trackTitleText} numberOfLines={1}>
+            {item.name}
+          </Text>
+        </View>
+        <Text style={styles.trackArtistText} numberOfLines={1}>
+          {item.artist}
+        </Text>
+      </View>
+
+      <Text style={styles.playArrow}>↗</Text>
     </TouchableOpacity>
   );
 
+  const activeModalTracks = selectedRange === 'short_term' ? shortTracks : mediumTracks;
+  const backgroundAlbum = shortTracks[0]?.albumUrl || mediumTracks[0]?.albumUrl;
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* HEADER: LOGO & NÚT SHARE */}
+      <StatusBar barStyle="dark-content" />
+
+      {/* LỚP NỀN BLUR TỔNG THỂ */}
+      {backgroundAlbum && (
+        <>
+          <Image
+            source={{ uri: backgroundAlbum }}
+            style={styles.backgroundAlbum}
+            blurRadius={5}
+          />
+          <BlurView intensity={80} tint="light" style={StyleSheet.absoluteFill} />
+        </>
+      )}
+      <View style={styles.backgroundOverlay} />
+
+      {/* HEADER CHÍNH */}
       <View style={styles.headerContainer}>
-        <Image source={require('../../assets/images/logo.png')} style={styles.logo} /> 
-        <TouchableOpacity 
-          style={[styles.headerShareButton, tracks.length === 0 && { opacity: 0.5 }]} 
-          onPress={() => setIsShareModalVisible(true)}
-          disabled={tracks.length === 0} // Vô hiệu hóa nếu chưa có bài hát nào
-        >
-          <Text style={styles.headerShareText}>Share</Text>
-        </TouchableOpacity>
-      </View>
-      
-      {/* THANH CHUYỂN ĐỔI TAB */}
-      <View style={styles.tabContainer}>
-        <TouchableOpacity 
-          style={[styles.tabButton, currentTab === 'short_term' && styles.activeTab]}
-          onPress={() => setCurrentTab('short_term')}
-        >
-          <Text style={[styles.tabText, currentTab === 'short_term' && styles.activeTabText]}>recent faves</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity 
-          style={[styles.tabButton, currentTab === 'medium_term' && styles.activeTab]}
-          onPress={() => setCurrentTab('medium_term')}
-        >
-          <Text style={[styles.tabText, currentTab === 'medium_term' && styles.activeTabText]}>all time feels</Text>
-        </TouchableOpacity>
+        <Image
+          source={require('../../assets/images/logo.png')}
+          style={styles.logo}
+        />
+        <View style={styles.vaultTag}>
+          <Text style={styles.vaultTagText}>INSIGHTS HUB</Text>
+        </View>
       </View>
 
-      {/* DANH SÁCH BÀI HÁT */}
+      <Text style={styles.sectionHeader}>TASTE ARCHIVE</Text>
+      <Text style={styles.sectionSubHeader}>Select an era to explore your listening stats</Text>
+
+      {/* KHU VỰC 2 CỤC SUMMARY LỰA CHỌN */}
       {isLoading ? (
-        <ActivityIndicator size="large" color="#1DB954" style={{ marginTop: 50 }} />
+        <ActivityIndicator size="large" color="#1A1815" style={{ marginTop: 80 }} />
       ) : (
-        <FlatList 
-          data={tracks} 
-          keyExtractor={(item) => item.id} 
-          renderItem={renderItem} 
-          contentContainerStyle={styles.list} 
-          showsVerticalScrollIndicator={false} 
-        />
+        <View style={styles.hubWrapper}>
+          {/* CỤC 1: RECENT FAVES */}
+          <TouchableOpacity
+            style={styles.hubCard}
+            activeOpacity={0.9}
+            onPress={() => setSelectedRange('short_term')}
+          >
+            <BlurView intensity={35} tint="light" style={StyleSheet.absoluteFill} />
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardIndex}>VOL. 01</Text>
+              <View style={styles.timeBadge}>
+                <Text style={styles.timeBadgeText}>LAST 4 WEEKS</Text>
+              </View>
+            </View>
+
+            <View style={styles.cardVisualRow}>
+              <View style={styles.cardDiscBox}>
+                <Image
+                  source={{ uri: shortTracks[0]?.albumUrl || 'https://via.placeholder.com/200' }}
+                  style={styles.cardDiscImg}
+                />
+                <View style={styles.discSpindleRing} />
+              </View>
+              <View style={styles.cardTextContent}>
+                <Text style={styles.cardMainTitle}>RECENT FAVES</Text>
+                <Text style={styles.cardTopArtist} numberOfLines={1}>
+                  Top: {shortTracks[0]?.name || 'Loading...'}
+                </Text>
+                <Text style={styles.cardCountText}>{shortTracks.length} TRACKS ARCHIVED</Text>
+              </View>
+            </View>
+
+            <View style={styles.cardActionRow}>
+              <Text style={styles.cardExploreText}>EXPLORE TRACKLIST</Text>
+              <Text style={styles.arrowRight}>→</Text>
+            </View>
+          </TouchableOpacity>
+
+          {/* CỤC 2: ALL TIME FEELS */}
+          <TouchableOpacity
+            style={[styles.hubCard, styles.hubCardSecondary]}
+            activeOpacity={0.9}
+            onPress={() => setSelectedRange('medium_term')}
+          >
+            <BlurView intensity={35} tint="light" style={StyleSheet.absoluteFill} />
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardIndex}>VOL. 02</Text>
+              <View style={[styles.timeBadge, styles.timeBadgeAlt]}>
+                <Text style={styles.timeBadgeText}>LAST 6 MONTHS</Text>
+              </View>
+            </View>
+
+            <View style={styles.cardVisualRow}>
+              <View style={styles.cardDiscBox}>
+                <Image
+                  source={{ uri: mediumTracks[0]?.albumUrl || 'https://via.placeholder.com/200' }}
+                  style={styles.cardDiscImg}
+                />
+                <View style={styles.discSpindleRing} />
+              </View>
+              <View style={styles.cardTextContent}>
+                <Text style={styles.cardMainTitle}>ALL TIME FEELS</Text>
+                <Text style={styles.cardTopArtist} numberOfLines={1}>
+                  Top: {mediumTracks[0]?.name || 'Loading...'}
+                </Text>
+                <Text style={styles.cardCountText}>{mediumTracks.length} TRACKS ARCHIVED</Text>
+              </View>
+            </View>
+
+            <View style={styles.cardActionRow}>
+              <Text style={styles.cardExploreText}>EXPLORE TRACKLIST</Text>
+              <Text style={styles.arrowRight}>→</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
       )}
 
-      {/* MODAL (FORM PREVIEW) TRƯỚC KHI SHARE */}
+      {/* CỬA SỔ RIÊNG BIỆT (MODAL CHI TIẾT) */}
       <Modal
-        visible={isShareModalVisible}
+        visible={selectedRange !== null}
         animationType="slide"
-        transparent={true}
-        onRequestClose={() => setIsShareModalVisible(false)}
+        presentationStyle="pageSheet"
+        onRequestClose={() => setSelectedRange(null)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Share Your Taste</Text>
-            
-            {/* Box hiển thị trước nội dung */}
-            <View style={styles.previewBox}>
-              <Text style={styles.previewTitle}>
-                {currentTab === 'short_term' ? 'Recent Faves' : 'All Time Feels'}
-              </Text>
-              <ScrollView>
-                {tracks.slice(0, 5).map((item, index) => (
-                  <Text key={item.id} style={styles.previewTrackText} numberOfLines={1}>
-                    {index + 1}. {item.name} - <Text style={{color: '#b3b3b3'}}>{item.artist}</Text>
-                  </Text>
-                ))}
-              </ScrollView>
-            </View>
+        <SafeAreaView style={styles.detailContainer}>
+          <StatusBar barStyle="dark-content" />
 
-            {/* Các nút hành động trong Modal */}
-            <View style={styles.modalActions}>
-              <TouchableOpacity 
-                style={styles.cancelBtn} 
-                onPress={() => setIsShareModalVisible(false)}
-              >
-                <Text style={styles.cancelBtnText}>Hủy</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.confirmShareBtn} 
-                onPress={onShare}
-              >
-                <Text style={styles.confirmShareBtnText}>Share Ngay</Text>
-              </TouchableOpacity>
-            </View>
+          {/* Header Cửa Sổ Riêng */}
+          <View style={styles.detailHeaderRow}>
+            <TouchableOpacity
+              style={styles.closeRoundBtn}
+              onPress={() => setSelectedRange(null)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.closeBtnText}>✕ CLOSE</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.detailShareBtn} onPress={onShare} activeOpacity={0.7}>
+              <Text style={styles.detailShareText}>SHARE ↗</Text>
+            </TouchableOpacity>
           </View>
-        </View>
-      </Modal>
 
+          <View style={styles.detailTitleBox}>
+            <Text style={styles.detailSuperText}>
+              {selectedRange === 'short_term' ? 'ERA // LAST 4 WEEKS' : 'ERA // LAST 6 MONTHS'}
+            </Text>
+            <Text style={styles.detailHeaderTitle}>
+              {selectedRange === 'short_term' ? 'RECENT FAVES' : 'ALL TIME FEELS'}
+            </Text>
+          </View>
+
+          {/* Danh Sách Bài Hát Riêng Biệt */}
+          <FlatList
+            data={activeModalTracks}
+            keyExtractor={(item) => item.id}
+            renderItem={renderTrackItem}
+            contentContainerStyle={styles.detailListContent}
+            showsVerticalScrollIndicator={false}
+          />
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F4F6FB', paddingHorizontal: 20 },
-  
-  // Header styles
-  headerContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 15, marginBottom: 15 },
-  logo: { width: 140, height: 45, resizeMode: 'contain', marginLeft: -50 },
-  headerShareButton: { backgroundColor: '#1DB954', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
-  headerShareText: { color: 'white', fontWeight: 'bold', fontSize: 14 },
-  
-  // Tab styles
-  tabContainer: { flexDirection: 'row', backgroundColor: '#282828', borderRadius: 8, padding: 4, marginBottom: 20 },
-  tabButton: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 6 },
-  activeTab: { backgroundColor: '#404040' },
-  tabText: { color: '#b3b3b3', fontSize: 14, fontWeight: 'bold' },
-  activeTabText: { color: 'white' },
-  
-  // List styles
-  list: { paddingBottom: 100 },
-  trackItem: { backgroundColor: '#282828', padding: 10, borderRadius: 8, marginBottom: 10, flexDirection: 'row', alignItems: 'center' },
-  rankText: { color: '#1DB954', fontSize: 16, fontWeight: 'bold', marginRight: 15, width: 30, textAlign: 'center' },
-  albumArt: { width: 50, height: 50, borderRadius: 6, marginRight: 15 },
-  trackInfo: { flex: 1 },
-  trackName: { color: 'white', fontSize: 16, fontWeight: 'bold', marginBottom: 4 },
-  artistName: { color: '#b3b3b3', fontSize: 14 },
+  container: { flex: 1, backgroundColor: 'transparent', paddingHorizontal: 16 },
 
-  // Modal Styles (Form Preview)
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { width: '85%', backgroundColor: '#282828', borderRadius: 12, padding: 20, alignItems: 'center' },
-  modalTitle: { color: 'white', fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
-  previewBox: { width: '100%', backgroundColor: '#404040', padding: 15, borderRadius: 8, marginBottom: 20, maxHeight: 200 },
-  previewTitle: { color: '#1DB954', fontSize: 16, fontWeight: 'bold', marginBottom: 10, textAlign: 'center' },
-  previewTrackText: { color: 'white', fontSize: 14, marginBottom: 8 },
-  modalActions: { flexDirection: 'row', width: '100%', justifyContent: 'space-between' },
-  cancelBtn: { paddingVertical: 12, paddingHorizontal: 20, backgroundColor: 'transparent', borderRadius: 8 },
-  cancelBtnText: { color: '#b3b3b3', fontSize: 16, fontWeight: 'bold' },
-  confirmShareBtn: { paddingVertical: 12, paddingHorizontal: 20, backgroundColor: '#1DB954', borderRadius: 8 },
-  confirmShareBtnText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+  backgroundAlbum: {
+    position: 'absolute',
+    width: '160%',
+    height: '160%',
+    left: '-30%',
+    top: '-20%',
+    opacity: 0.7,
+  },
+  backgroundOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(246, 244, 239, 0.52)',
+  },
+
+  headerContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  logo: { width: 140, height: 45, resizeMode: 'contain', marginLeft: -50 },
+  vaultTag: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: 'rgba(0, 0, 0, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.1)',
+  },
+  vaultTagText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#3A3630',
+  },
+
+  sectionHeader: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#1A1815',
+    letterSpacing: 0.5,
+    marginTop: 4,
+  },
+  sectionSubHeader: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 10.5,
+    color: '#6B665E',
+    marginBottom: 16,
+    marginTop: 2,
+  },
+
+  // KHU VỰC 2 CỤC SUMMARY (HUB CARDS)
+  hubWrapper: {
+    gap: 16,
+    paddingBottom: 110,
+  },
+  hubCard: {
+    width: '100%',
+    height: 168,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.45)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.85)',
+    padding: 14,
+    justifyContent: 'space-between',
+    overflow: 'hidden',
+    shadowColor: '#2B261D',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  hubCardSecondary: {
+    backgroundColor: 'rgba(250, 247, 240, 0.45)',
+  },
+
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cardIndex: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#8A8275',
+  },
+  timeBadge: {
+    backgroundColor: '#1A1815',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  timeBadgeAlt: {
+    backgroundColor: '#3E3B36',
+  },
+  timeBadgeText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 8.5,
+    color: '#FFF',
+  },
+
+  cardVisualRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cardDiscBox: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#D1D3D8',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.9)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    marginRight: 14,
+  },
+  cardDiscImg: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 34,
+  },
+  discSpindleRing: {
+    position: 'absolute',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    borderWidth: 1,
+    borderColor: '#BBBEC4',
+  },
+
+  cardTextContent: {
+    flex: 1,
+  },
+  cardMainTitle: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#1A1815',
+    letterSpacing: -0.4,
+  },
+  cardTopArtist: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#656056',
+    marginTop: 2,
+  },
+  cardCountText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 9.5,
+    color: '#8A8275',
+    marginTop: 4,
+  },
+
+  cardActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTopWidth: 0.8,
+    borderTopColor: 'rgba(0, 0, 0, 0.08)',
+    paddingTop: 8,
+  },
+  cardExploreText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#1A1815',
+    letterSpacing: 0.5,
+  },
+  arrowRight: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#1A1815',
+  },
+
+  // CỬA SỔ CHI TIẾT (DETAIL VIEW MODAL)
+  detailContainer: {
+    flex: 1,
+    backgroundColor: '#F7F5F0',
+    paddingHorizontal: 16,
+  },
+  detailHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 12,
+  },
+  closeRoundBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    backgroundColor: 'rgba(0, 0, 0, 0.07)',
+    borderRadius: 20,
+  },
+  closeBtnText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#333',
+  },
+  detailShareBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    backgroundColor: '#1A1815',
+    borderRadius: 20,
+  },
+  detailShareText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFF',
+  },
+
+  detailTitleBox: {
+    marginBottom: 16,
+    paddingHorizontal: 4,
+  },
+  detailSuperText: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 10,
+    color: '#8A8275',
+    letterSpacing: 0.8,
+  },
+  detailHeaderTitle: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#1A1815',
+    letterSpacing: -0.5,
+    marginTop: 2,
+  },
+
+  detailListContent: {
+    paddingBottom: 40,
+  },
+  detailTrackItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.06)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+  },
+  miniCdCase: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#E0E2E6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+    overflow: 'hidden',
+  },
+  miniCdImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 24,
+  },
+  miniCdCenterRing: {
+    position: 'absolute',
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  miniCdHole: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#444',
+  },
+  trackDetails: {
+    flex: 1,
+  },
+  trackTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  rankNum: {
+    fontFamily: Platform.OS === 'ios' ? 'Menlo-Bold' : 'monospace',
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#8A8275',
+    marginRight: 6,
+  },
+  trackTitleText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1A1815',
+  },
+  trackArtistText: {
+    fontSize: 11.5,
+    fontWeight: '500',
+    color: '#6F6A60',
+    marginTop: 2,
+  },
+  playArrow: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#8A8275',
+    marginLeft: 8,
+  },
 });
